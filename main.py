@@ -50,13 +50,13 @@ class CommandApprovalView(View):
         self.description = description
 
     @discord.ui.button(label="Approve", style=discord.ButtonStyle.green)
-    async def approve_button_callback(self, button: Button, interaction: discord.Interaction):
+    async def approve_button_callback(self, interaction: discord.Interaction, button: Button):
         await self.handle_approval(interaction, approved=True)
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
-    async def deny_button_callback(self, button: Button, interaction: discord.Interaction):
+    async def deny_button_callback(self, interaction: discord.Interaction, button: Button):
         await self.handle_approval(interaction, approved=False)
-    
+
     async def handle_approval(self, interaction: discord.Interaction, approved: bool):
         user = await bot.fetch_user(self.user_id)
         if approved:
@@ -251,7 +251,7 @@ async def custom_command(interaction: discord.Interaction, name: str, descriptio
     result = cursor.fetchone()
 
     if result and result[0] >= 2:
-        await interaction.response.send_message("You have reached the maximum number if custom command requests make a ticket [here](https://discord.gg/UzMYzCs2Ge) or reach out to inferno to request more", ephemeral=True)
+        await interaction.response.send_message("You have reached the maximum number of custom command requests make a ticket [here](https://discord.gg/UzMYzCs2Ge) or reach out to inferno to request more", ephemeral=True)
         return
 
     cursor.execute("INSERT INTO command_requests (user_id, count) VALUES (%s, 1) ON DUPLICATE KEY UPDATE count = count + 1", (interaction.user.id,))
@@ -269,6 +269,40 @@ async def custom_command(interaction: discord.Interaction, name: str, descriptio
     owner = await bot.fetch_user(owner_id)
     await owner.send(embed=embed, view=view)
     await interaction.response.send_message("Your custom command request has been sent for approval.", ephemeral=True)
+
+@bot.tree.command(name="notify", description="Notify the user when their command is done")
+async def notify(interaction: discord.Interaction, user_id: int):
+    if interaction.user.id != owner_id:
+        await interaction.response.send_message("You are not authorized to use this command")
+        return
+    
+    try:
+        user_id_int = int(user_id)
+    except ValueError:
+        await interaction.response.send_message("Invaild user ID format. Please provide a vaild user id")
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT command_name, command_description FROM command_requests WHERE user_id = %s", (user_id_int,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        command_name, command_description = result
+        embed = discord.Embed(
+            title="Custom Command Ready",
+            description=f"**Command Name**: {command_name}\n**Description:** {command_description}\n\nYour custom command is now ready and available for use.",
+            color=discord.Color.green()
+        )
+        try:
+            user = await bot.fetch_user(user_id_int)
+            await user.sned(embed=embed)
+            await interaction.response.send_message(f"Notification sent to user {user_id_int}.", ephemeral=True)
+        except discord.NotFound:
+            await interaction.response.send_message(f"User with ID {user_id_int} not found.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"No custom command request found for user id {user_id_int}", ephemeral=True)
 
 app = Flask(__name__)
 

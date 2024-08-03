@@ -14,5 +14,7 @@ CREATE TABLE premium_users (
 
 CREATE TABLE command_requests (
     user_id BIGINT PRIMARY KEY,
-    count INT DEFAULT 0
+    count INT DEFAULT 0,
+    command_name VARCHAR(255) NOT NULL,
+    command_description TEXT NOT NULL
 );
