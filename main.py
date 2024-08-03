@@ -8,7 +8,7 @@ import base64
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 import logging
-
+from discord.ui import Button, View
 
 load_dotenv()
 
@@ -27,6 +27,8 @@ prefix = "."
 bot = commands.Bot(command_prefix=prefix, intents=intents)
 token = os.getenv('token')
 
+owner_id = 969809822176411649
+
 # Database configuration
 db_config = {
     'user': 'inferno',
@@ -39,6 +41,33 @@ db_config = {
 paypal_client_id = os.getenv('paypal_client_id')
 paypal_secret = os.getenv('paypal_secret')
 paypal_api_base = 'https://api.paypal.com'
+
+class CommandApprovalView(View):
+    def __init__(self, user_id: int, name: str, description: str):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.name = name
+        self.description = description
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.green)
+    async def approve_button_callback(self, button: Button, interaction: discord.Interaction):
+        await self.handle_approval(interaction, approved=True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
+    async def deny_button_callback(self, button: Button, interaction: discord.Interaction):
+        await self.handle_approval(interaction, approved=False)
+    
+    async def handle_approval(self, interaction: discord.Interaction, approved: bool):
+        user = await bot.fetch_user(self.user_id)
+        if approved:
+            await user.send(embed=self.get_response_embed(f"{interaction.user} has approved your request for a custom command. You will be notifed when your command is ready"))
+            await interaction.response.send_message("You have approved the custom command request.", ephemeral=True)
+        else:
+            await user.send(embed=self.get_response_embed(f"Your request for a custom command has been denied by {interaction.user}."))
+            await interaction.response.send_message("You have denied the custom command request.", ephemeral=True)
+    
+    def get_response_embed(self, message: str):
+        return discord.Embed(description=message, color=discord.Color.green() if "approved" in message else discord.Color.red())
 
 def get_db_connection():
     return mysql.connector.connect(**db_config)
@@ -214,6 +243,32 @@ async def create_role(interaction: discord.Interaction, role_name: str, color: s
     else:
         await interaction.response.send_message("You do not have premium therefor you cant run this command to get premium run `/but-premium` FYI its 9,99 EUR", ephemeral=True)
 
+@bot.tree.command(name="custom-command", description="Request a custom command")
+async def custom_command(interaction: discord.Interaction, name: str, description: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT count FROM command_requests WHERE user_id = %s", (interaction.user.id,))
+    result = cursor.fetchone()
+
+    if result and result[0] >= 2:
+        await interaction.response.send_message("You have reached the maximum number if custom command requests make a ticket [here](https://discord.gg/UzMYzCs2Ge) or reach out to inferno to request more", ephemeral=True)
+        return
+
+    cursor.execute("INSERT INTO command_requests (user_id, count) VALUES (%s, 1) ON DUPLICATE KEY UPDATE count = count + 1", (interaction.user.id,))
+    conn.commit()
+    conn.close()
+
+    embed = discord.Embed(
+        title="Custom Command Request",
+        description=f"**User:** {interaction.user}\n**Command Name:** {name}\n**Description:** {description}",
+        color=discord.Color.blue()
+    )
+
+    view = CommandApprovalView(interaction.user.id, name, description)
+
+    owner = await bot.fetch_user(owner_id)
+    await owner.send(embed=embed, view=view)
+    await interaction.response.send_message("Your custom command request has been sent for approval.", ephemeral=True)
 
 app = Flask(__name__)
 

@@ -1,4 +1,4 @@
-CREATE DATABASE atlas_database;
+CREATE atlas_database;
 
 USE atlas_database;
 
@@ -10,4 +10,9 @@ CREATE TABLE allowed_user_ids (
 
 CREATE TABLE premium_users (
     id BIGINT PRIMARY KEY
+);
+
+CREATE TABLE command_requests (
+    user_id BIGINT PRIMARY KEY,
+    count INT DEFAULT 0
 );
