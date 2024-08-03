@@ -178,7 +178,7 @@ async def buy_premium(interaction: discord.Interaction):
         await interaction.response.send_message("There was a problem connecting to the payment service. Please try again later.", ephemeral=True)
         logging.error(f"Request Error: {e}")
 
-@bot.tree.command(name="premium", description="A premium command for premium users")
+@bot.tree.command(name="premium-check", description="Check if you have premium")
 async def premium(interaction: discord.Interaction):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -190,6 +190,30 @@ async def premium(interaction: discord.Interaction):
         await interaction.response.send_message("You have premium", ephemeral=True)
     else:
         await interaction.response.send_message("You do not have premium", ephemeral=True)
+
+
+@bot.tree.command(name="create_role", description="Allows a premium member to create a role with no perms")
+async def create_role(interaction: discord.Interaction, role_name: str, color: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM premium_users WHERE id = %s", (interaction.user.id,))
+    result = cursor.fetchone()
+    conn.close
+
+    if result:
+        try:
+            color_value = int(color.strip('#'), 16)
+            guild = interaction.guild
+            user_role = guild.create_role(name=role_name, color=discord.Color(color_value))
+            await interaction.user.add_roles(user_role)
+            await interaction.response.send_message(f"Created role: {role_name} (Color: #{color}), Added role: {role_name} to you", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Invaild color format. Please use a hexadecimal color code, e.g., #ff5733", ephemeral=True)
+        except discord.DiscordException as e:
+            await interaction.response.send_message(f"An error occurred while creating the role: {e}", ephemeral=True)
+    else:
+        await interaction.response.send_message("You do not have premium therefor you cant run this command to get premium run `/but-premium` FYI its 9,99 EUR", ephemeral=True)
+
 
 app = Flask(__name__)
 
