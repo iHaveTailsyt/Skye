@@ -204,7 +204,7 @@ async def create_role(interaction: discord.Interaction, role_name: str, color: s
         try:
             color_value = int(color.strip('#'), 16)
             guild = interaction.guild
-            user_role = guild.create_role(name=role_name, color=discord.Color(color_value))
+            user_role = await guild.create_role(name=role_name, color=discord.Color(color_value))
             await interaction.user.add_roles(user_role)
             await interaction.response.send_message(f"Created role: {role_name} (Color: #{color}), Added role: {role_name} to you", ephemeral=True)
         except ValueError:
