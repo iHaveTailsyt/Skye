@@ -493,7 +493,7 @@ async def download_transcript(filename):
     print(f"Requested file path: {file_path}")
 
     if not os.path.isfile(file_path):
-        print(f"File not found: {file_path}")
+        print(f"File not found at: {file_path}")
         abort(404, description="Transcript not found")
 
     return send_from_directory(transcript_dir, filename)
