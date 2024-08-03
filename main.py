@@ -23,8 +23,8 @@ logging.basicConfig(level=logging.INFO,
 
 # Initialize bot
 intents = discord.Intents.all()
-prefix = ","
-bot = commands.Bot(command_prefix=prefix, intents=intents)
+prefix = "."
+bot = commands.Bot(command_prefix=prefix, intents=intents, help_command=None)
 token = os.getenv('token')
 
 owner_id = 969809822176411649
