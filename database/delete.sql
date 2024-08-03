@@ -1,0 +1,1 @@
+DELETE DATABASE atlas_database;

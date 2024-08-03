@@ -9,7 +9,7 @@ from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 import logging
 
-# Load environment variables
+
 load_dotenv()
 
 # Configure logging
