@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO,
 
 # Initialize bot
 intents = discord.Intents.all()
-prefix = "."
+prefix = ","
 bot = commands.Bot(command_prefix=prefix, intents=intents)
 token = os.getenv('token')
 
