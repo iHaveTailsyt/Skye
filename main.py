@@ -271,38 +271,24 @@ async def custom_command(interaction: discord.Interaction, name: str, descriptio
     await interaction.response.send_message("Your custom command request has been sent for approval.", ephemeral=True)
 
 @bot.tree.command(name="notify", description="Notify the user when their command is done")
-async def notify(interaction: discord.Interaction, user_id: int):
+async def notify(interaction: discord.Interaction, user: discord.User):
     if interaction.user.id != owner_id:
         await interaction.response.send_message("You are not authorized to use this command")
         return
-    
+
     try:
-        user_id_int = int(user_id)
-    except ValueError:
-        await interaction.response.send_message("Invaild user ID format. Please provide a vaild user id")
-        return
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT command_name, command_description FROM command_requests WHERE user_id = %s", (user_id_int,))
-    result = cursor.fetchone()
-    conn.close()
-
-    if result:
-        command_name, command_description = result
+        user = await bot.fetch_user(user.id)
         embed = discord.Embed(
             title="Custom Command Ready",
-            description=f"**Command Name**: {command_name}\n**Description:** {command_description}\n\nYour custom command is now ready and available for use.",
+            description=f"Your custom command is now ready and available for use. | Sent by: <@{interaction.user.id}> (ID: {interaction.user.id})",
             color=discord.Color.green()
         )
-        try:
-            user = await bot.fetch_user(user_id_int)
-            await user.sned(embed=embed)
-            await interaction.response.send_message(f"Notification sent to user {user_id_int}.", ephemeral=True)
-        except discord.NotFound:
-            await interaction.response.send_message(f"User with ID {user_id_int} not found.", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"No custom command request found for user id {user_id_int}", ephemeral=True)
+        embed.set_footer(text=f"Requested by {interaction.user}")
+
+        await user.send(embed=embed)
+        await interaction.response.send_message(f"Notification sent to user {user.mention}", ephemeral=True)
+    except discord.NotFound:
+        await interaction.response.send_message(f"User {user.mention} not found", ephemeral=True)
 
 app = Flask(__name__)
 
