@@ -1,3 +1,4 @@
+import time
 from discord.ext import commands
 import discord
 import os
@@ -5,7 +6,7 @@ import mysql.connector
 import requests
 import json
 import base64
-from flask import Flask, jsonify, request
+from flask import Flask, abort, jsonify, request, render_template_string, send_from_directory
 from dotenv import load_dotenv
 import logging
 from discord.ui import Button, View
@@ -69,8 +70,129 @@ class CommandApprovalView(View):
     def get_response_embed(self, message: str):
         return discord.Embed(description=message, color=discord.Color.green() if "approved" in message else discord.Color.red())
 
+class TicketView(View):
+    def __init__(self, ticket_channel, creator_id):
+        super().__init__(timeout=None)
+        self.ticket_channel = ticket_channel
+        self.creator_id = creator_id
+
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red)
+    async def close_ticket_button_callback(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("Closing Ticket...", ephemeral=True)
+        await self.close_ticket_process(interaction.user)
+
+    async def close_ticket_process(self, closer_user):
+        messages = []
+        users_info = {}
+        async for message in self.ticket_channel.history(limit=None):
+            if message.author.id not in users_info:
+                member = await self.ticket_channel.guild.fetch_member(message.author.id)
+                users_info[message.author.id] = {
+                    'id': member.id,
+                    'display_name': member.display_name,
+                    'avatar_url': member.avatar.url,
+                    'joined_at': member.joined_at,
+                    'message_count': 0
+                }
+            users_info[message.author.id]['message_count'] += 1
+
+            attachments = [{'url': att.url} for att in message.attachments]
+            messages.append({
+                'author_id': message.author.id,
+                'content': message.content,
+                'attachments': attachments
+            })
+
+        html_transcript = generate_html_transcript(messages, users_info)
+        ticket_number = len([name for name in os.listdir('transcripts') if os.path.isfile(os.path.join('transcripts', name)) and name.startswith('general-')]) + 1
+        transcript_path = f'transcripts/general-{ticket_number}.html'
+        os.makedirs(os.path.dirname(transcript_path), exist_ok=True)
+        
+        with open(transcript_path, 'w') as file:
+            file.write(html_transcript)
+
+        # Notify the user who closed the ticket
+        try:
+            embed = discord.Embed(title="Ticket Closed", description="The ticket has been closed. Here is the transcript.", color=discord.Color.green())
+            embed.add_field(name="Transcript", value=f"http://picked-next-horse.ngrok-free.app/transcripts/general-{ticket_number}.html")
+            await closer_user.send(embed=embed)
+        except discord.Forbidden:
+            logging.error(f"Could not DM {closer_user}.")
+
+        # Notify the user who created the ticket
+        creator = await bot.fetch_user(self.creator_id)
+        try:
+            embed = discord.Embed(title="Ticket Closed", description="The ticket you created has been closed. Here is the transcript.", color=discord.Color.green())
+            embed.add_field(name="Transcript", value=f"http://picked-next-horse.ngrok-free.app/transcripts/general-{ticket_number}.html")
+            await creator.send(embed=embed)
+        except discord.Forbidden:
+            logging.error(f"Could not DM {creator}.")
+
+        await self.ticket_channel.send("Closing Ticket...")
+        time.sleep(3)
+        await self.ticket_channel.delete()
+
+
 def get_db_connection():
     return mysql.connector.connect(**db_config)
+
+def generate_html_transcript(messages, users_info):
+    current_time = discord.utils.utcnow().strftime('%d %B %Y at %H:%M:%S (UTC)')
+    html_content = f"""
+    <html>
+    <head>
+        <title>Ticket Transcript</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; background-color: #2c2f33; color: #ffffff; }}
+            .message {{ border-bottom: 1px solid #444; padding: 10px; display: flex; align-items: center; }}
+            .header, .footer {{ background-color: #23272a; padding: 10px; text-align: center; }}
+            .user-info {{ display: none; position: absolute; background-color: #444; padding: 10px; border: 1px solid #555; }}
+            .user:hover .user-info {{ display: block; }}
+            .user-pfp {{ width: 40px; height: 40px; border-radius: 50%; margin-right: 10px; }}
+            .user {{ display: flex; align-items: center; cursor: pointer; }}
+            .message-content {{ margin-left: 10px; }}
+            .message-images img {{ max-width: 200px; max-height: 200px; margin: 5px; }}
+        </style>
+    </head>
+    <body>
+        <div class='header'>
+            <h1>Ticket Transcript</h1>
+            <p>This transcript was generated on {current_time}</p>
+        </div>
+    """
+
+    for message in messages:
+        user_info = users_info[message['author_id']]
+        html_content += f"""
+        <div class='message'>
+            <img src='{user_info['avatar_url']}' class='user-pfp' />
+            <div class='message-content'>
+                <strong class='user'>{user_info['display_name']}
+                    <div class='user-info'>
+                        <p><strong>Member Since:</strong> {user_info['joined_at'].strftime('%b %d, %Y')}</p>
+                        <p><strong>Member ID:</strong> {user_info['id']}</p>
+                        <p><strong>Message Count:</strong> {user_info['message_count']}</p>
+                    </div>
+                </strong>
+                <p>{message['content']}</p>
+                <div class='message-images'>
+        """
+
+        for attachment in message['attachments']:
+            if attachment['url']:
+                html_content += f"<img src='{attachment['url']}' alt='attachment' />"
+
+        html_content += "</div></div></div>"
+    
+    html_content += "<div class='footer'><p>End of transcript</p></div></body></html>"
+    return html_content
+
+async def create_ticket_channel(guild, category_id, channel_name):
+    category = discord.utils.get(guild.categories, id=category_id)
+    if category:
+        channel = await guild.create_text_channel(name=channel_name, category=category)
+        return channel
+    return None
 
 def create_paypal_order(user_id):
     auth = (paypal_client_id, paypal_secret)
@@ -290,7 +412,29 @@ async def notify(interaction: discord.Interaction, user: discord.User):
     except discord.NotFound:
         await interaction.response.send_message(f"User {user.mention} not found", ephemeral=True)
 
-app = Flask(__name__)
+@bot.tree.command(name='ticket-create', description="Create a new support ticket")
+async def ticket(interaction: discord.Interaction):
+    guild = interaction.guild
+    category_id = 1269223300727443600
+    category = discord.utils.get(guild.categories, id=category_id)
+
+    if category:
+        existing_tickets = [ch for ch in category.channels if ch.name.startswith('general-') or ch.name.startswith('service-')]
+        ticket_number = len(existing_tickets) + 1
+        ticket_name = f"general-{ticket_number}"
+
+        channel = await create_ticket_channel(guild, category_id, ticket_name)
+
+        if channel:
+            await channel.send(
+                embed=discord.Embed(title="New Ticket", description=f"Thank you <@{interaction.user.id}> for making a ticket our support team will be with you soon please describe the issue or having or what you need", color=discord.Color.blue()),
+                view=TicketView(channel, interaction.user.id)
+            )
+            await interaction.response.send_message(f"Ticket created: {channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message("Failed to create the ticket channel", ephemeral=True)
+
+app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -328,7 +472,31 @@ def webhook():
 @app.route('/', methods=['GET'])
 def index():
     logging.info('Payment completed')
-    return 'Payment completed'
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta http-equiv="refresh" content="3; url=https://discord.gg/QPSasbcuSt" />
+    </head>
+    <body>
+        <h1>Payment confirmed. | Redirecting</h1>
+    </body>
+    </html>                  
+    """)
+
+@app.route('/transcript/<path:filename>')
+async def download_transcript(filename):
+    transcript_dir = '/transcripts'
+
+    file_path = os.path.join(transcript_dir, filename)
+
+    print(f"Requested file path: {file_path}")
+
+    if not os.path.isfile(file_path):
+        print(f"File not found: {file_path}")
+        abort(404, description="Transcript not found")
+
+    return send_from_directory(transcript_dir, filename)
 
 if __name__ == "__main__":
     import threading
