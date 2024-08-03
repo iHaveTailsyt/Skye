@@ -175,14 +175,14 @@ async def on_ready():
 
     guild_count = 0
     for guild in bot.guilds:
-        logging.info(f"Guild ID: {guild.id} (name: {guild.name})")
+        print(f"Guild ID: {guild.id} (name: {guild.name})")
         guild_count += 1
 
-    logging.info(f"Logged in as {bot.user} | Servers: {guild_count}")
+    print(f"Logged in as {bot.user} | Servers: {guild_count}")
 
     try:
         synced_commands = await bot.tree.sync()
-        logging.info(f"Synced {len(synced_commands)} Commands")
+        print(f"Synced {len(synced_commands)} Commands")
     except Exception as e:
         logging.error(f"An error with syncing application commands has occurred: {e}")
 
