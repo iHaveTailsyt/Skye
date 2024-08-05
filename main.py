@@ -313,9 +313,69 @@ async def remind_user(user_id: int, remind_time_at: datetime, message: str):
                 reminders[user_id].remove(reminder)
                 break
 
+@tasks.loop(seconds=5)
+async def check_alerts():
+    weather_alerts = fetch_weather_alerts()
+    if weather_alerts:
+        await send_alerts('weather', weather_alerts)
+
+def fetch_weather_alerts():
+    api_url = "https://api.weather.gov/alerts/active.json"
+    response = requests.get(api_url)
+    if response.status_code == 200:
+        alerts = response.json()
+        alert.get('features', [])
+        if alerts:
+            alert_messages = []
+            for alert in alerts:
+                alert_messages.append({
+                    'headline': alert['properties']['headline'],
+                    'description': alert['properties']['description'],
+                    'severity': alert['properties']['severity'],
+                    'event': alert['properites']['event'],
+                    'area_desc': alert['properites']['areadDesc'],
+                    'instruction': alert['properties']['instruction']
+                })
+            return alert_messages
+        return None
+
+async def send_alerts(alert_type, alert_messages):
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute("SELECT user_id FROM alert_opts WHERE alert_type = %s", (alert_type,))
+        user_ids = cursor.fetchall()
+        cursor.close()
+        connection.close()
+
+        for alert_message in alert_messages:
+            embed = discord.Embed(
+                title=f"**{alert_message['event']} Alert",
+                description=alert_message['description'],
+                color=discord.Color.red() if alert_message['severity'] in ['Extreme', 'Severe'] else discord.Color.orange()
+            )
+            embed.add_field(name="Headline", value=alert_message['headline'], inline=False)
+            embed.add_field(name="Severity", value=alert_message['severity'], inline=False)
+            embed.add_field(name="Area", value=alert_message['area_desc'], inline=False)
+            embed.add_field(name="Instructions", value=alert_message['instruction'], inline=False)
+            embed.set_footer(text="Stay safe and follow official instructions")
+
+            for (user_id) in user_ids:
+                user = await bot.fetch_user(user_id)
+                try:
+                    await user.send(embed=embed)
+                except discord.Forbidden:
+                    pass
+
+    except mysql.connector.Error as err:
+        logging.critical(f"Database error: {err}")
+
+
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.CustomActivity(name="Watching Dev"), status="dnd")
+
+    check_alerts()
 
     guild_count = 0
     for guild in bot.guilds:
@@ -496,6 +556,7 @@ async def Weather(interaction: discord.Interaction, location: str):
                 'few clouds': '🌤️',
                 'scattered clouds': '⛅',
                 'broken clouds': '☁️',
+                'overcast clouds': '',
                 'shower rain': '🌦️',
                 'rain': '🌧️',
                 'thunderstorm': '⛈️',
@@ -540,6 +601,34 @@ async def remind_me(interaction: discord.Interaction, time: int, *, message: str
     await interaction.response.send_message(f"Reminder set for {time} minutes from now", ephemeral=True)
 
     asyncio.create_task(remind_user(interaction.user.id, remind_time_at, message))
+
+@bot.tree.command(name="opt-in", description="Opt-in to receive Weather alerts")
+async def opt_in(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute("REPLACE INTO alert_opts (user_id, alert_type) VALUES (%s, %s)", (user_id, 'weather'))
+        connection.commit()
+        cursor.close()
+        connection.close()
+        await interaction.response.send_message("You have opted in to recive weather alerts.", ephemeral=True)
+    except mysql.connector.Error as err:
+        await interaction.response.send_message(f"Error: {err}", ephemeral=True)
+
+@bot.tree.command(name="opt-out", description="Opt-out of reciving weather alerts")
+async def opt_out(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM alert_opts WHERE user_id = %s AND alert_type = %s", (user_id, 'weather'))
+        connection.commit()
+        cursor.close()
+        connection.close()
+        await interaction.response.send_message("You have opted out of receiving weather alerts.", ephemeral=True)
+    except mysql.connector.Error as err:
+        await interaction.response.send_message(f"Error: {err}", ephemeral=True)
 
 app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
 
