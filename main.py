@@ -44,6 +44,9 @@ paypal_client_id = os.getenv('paypal_client_id')
 paypal_secret = os.getenv('paypal_secret')
 paypal_api_base = 'https://api.paypal.com'
 
+# OpenWeather configuration
+weather_key = os.getenv('weather_key')
+
 class CommandApprovalView(View):
     def __init__(self, user_id: int, name: str, description: str):
         super().__init__(timeout=None)
@@ -453,6 +456,54 @@ async def cat(interaction: discord.Interaction):
             await interaction.response.send_message("Could not retrive a cat image at the moment")
     else:
         await interaction.response.send_message("Failed to fetch a cat image")
+
+@bot.tree.command(name="weather", description="Gets the weather for a certin location")
+async def Weather(interaction: discord.Interaction, location: str):
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={weather_key}&units=metric"
+
+    try:
+        response = requests.get(url)
+        data = response.json()
+
+        if response.status_code == 200:
+            city_name = data['name']
+            weather_description = data['weather'][0]['description']
+            tempatrue = data['main']['temp']
+            humidity = data['main']['humidity']
+            icon_code = data['weather'][0]['icon']
+
+            emoji_dict = {
+                'clear sky': '☀️',
+                'few clouds': '🌤️',
+                'scattered clouds': '⛅',
+                'broken clouds': '☁️',
+                'shower rain': '🌦️',
+                'rain': '🌧️',
+                'thunderstorm': '⛈️',
+                'snow': '🌨️',
+                'mist': '🌫️'
+            }
+
+            weather_main = weather_description.lower()
+            unicode_char = emoji_dict.get(weather_main, '\u1F30D')
+
+            embed = discord.Embed(
+                title=f"Weather in {city_name}",
+                description=f"**{unicode_char} {weather_description.capitalize()}**",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Temperature", value=f"**{tempatrue}\u00B0C**", inline=True)
+            embed.add_field(name="Humidty", value=f"**{humidity}%**", inline=True)
+            embed.set_thumbnail(url=f"http://openweathermap.org/img/wn/{icon_code}.png")
+            embed.set_footer(text="Data provided by OpenWeatherMap")
+
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("Could not fetch weather data. Please check the location and try agian.", ephemeral=True)
+        
+    except requests.RequestException as e:
+        await interaction.response.send_message("An error occured while fetching weather data. Please try agian later.", ephemeral=True)
+        logging.critical(f"Weather command error: {e}")
 
 app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
 
