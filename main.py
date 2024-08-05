@@ -1,4 +1,5 @@
 import time
+import aiohttp
 from discord.ext import commands
 import discord
 import os
@@ -187,10 +188,14 @@ def generate_html_transcript(messages, users_info):
     html_content += "<div class='footer'><p>End of transcript</p></div></body></html>"
     return html_content
 
-async def create_ticket_channel(guild, category_id, channel_name):
+async def create_ticket_channel(guild, category_id, channel_name, creator):
     category = discord.utils.get(guild.categories, id=category_id)
     if category:
-        channel = await guild.create_text_channel(name=channel_name, category=category)
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            creator: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=overwrites)
         return channel
     return None
 
@@ -423,7 +428,7 @@ async def ticket(interaction: discord.Interaction):
         ticket_number = len(existing_tickets) + 1
         ticket_name = f"general-{ticket_number}"
 
-        channel = await create_ticket_channel(guild, category_id, ticket_name)
+        channel = await create_ticket_channel(guild, category_id, ticket_name, interaction.user)
 
         if channel:
             await channel.send(
@@ -433,6 +438,21 @@ async def ticket(interaction: discord.Interaction):
             await interaction.response.send_message(f"Ticket created: {channel.mention}", ephemeral=True)
         else:
             await interaction.response.send_message("Failed to create the ticket channel", ephemeral=True)
+
+@bot.tree.command(name="cat", description="Gets a random cat image")
+async def cat(interaction: discord.Interaction):
+    response = requests.get("https://api.thecatapi.com/v1/images/search")
+    if response.status_code == 200:
+        data = response.json()
+        if data:
+            cat_image_url = data[0]["url"]
+            embed = discord.Embed(title="Random Cat Image", color=discord.Color.blue())
+            embed.set_image(url=cat_image_url)
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("Could not retrive a cat image at the moment")
+    else:
+        await interaction.response.send_message("Failed to fetch a cat image")
 
 app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
 
