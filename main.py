@@ -1,6 +1,8 @@
+import asyncio
+from datetime import datetime, timedelta
 import time
 import aiohttp
-from discord.ext import commands
+from discord.ext import commands, tasks
 import discord
 import os
 import mysql.connector
@@ -28,7 +30,7 @@ intents = discord.Intents.all()
 prefix = "."
 bot = commands.Bot(command_prefix=prefix, intents=intents, help_command=None)
 token = os.getenv('token')
-
+reminders = {}
 owner_id = 969809822176411649
 
 # Database configuration
@@ -299,6 +301,18 @@ def capture_paypal_order(order_id):
     else:
         response.raise_for_status()
 
+async def remind_user(user_id: int, remind_time_at: datetime, message: str):
+    await asyncio.sleep((remind_time_at - discord.utils.utcnow()).total_seconds())
+
+    if user_id in reminders:
+        user_reminders = reminders[user_id]
+        for reminder in user_reminders:
+            if reminder["remind_time_at"] == remind_time_at:
+                user = await bot.fetch_user(user_id)
+                await user.send(f"Reminder: {message}")
+                reminders[user_id].remove(reminder)
+                break
+
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.CustomActivity(name="Watching Dev"), status="dnd")
@@ -315,6 +329,11 @@ async def on_ready():
         print(f"Synced {len(synced_commands)} Commands")
     except Exception as e:
         logging.error(f"An error with syncing application commands has occurred: {e}")
+
+@bot.event
+async def on_shutdown():
+    global reminders
+    reminders = {}
 
 @bot.tree.command(name="hello", description="Says hello back")
 async def hello(interaction: discord.Interaction):
@@ -504,6 +523,23 @@ async def Weather(interaction: discord.Interaction, location: str):
     except requests.RequestException as e:
         await interaction.response.send_message("An error occured while fetching weather data. Please try agian later.", ephemeral=True)
         logging.critical(f"Weather command error: {e}")
+
+@bot.tree.command(name="remind-me", description="Sets a reminder and will remind you after a certin amount of time")
+async def remind_me(interaction: discord.Interaction, time: int, *, message: str):
+    remind_time = time * 60
+    remind_time_at = discord.utils.utcnow() + timedelta(seconds=remind_time)
+
+    if interaction.user.id not in reminders:
+        reminders[interaction.user.id] = []
+
+    reminders[interaction.user.id].append({
+        "remind_time_at": remind_time_at,
+        "message": message
+    })
+
+    await interaction.response.send_message(f"Reminder set for {time} minutes from now", ephemeral=True)
+
+    asyncio.create_task(remind_user(interaction.user.id, remind_time_at, message))
 
 app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
 
