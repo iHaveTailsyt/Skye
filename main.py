@@ -6,6 +6,7 @@ from discord.ext import commands, tasks
 import discord
 import os
 import mysql.connector
+from mysql.connector import Error
 import requests
 import json
 import base64
@@ -313,7 +314,7 @@ async def remind_user(user_id: int, remind_time_at: datetime, message: str):
                 reminders[user_id].remove(reminder)
                 break
 
-@tasks.loop(seconds=5)
+@tasks.loop(minutes=50)
 async def check_alerts():
     weather_alerts = fetch_weather_alerts()
     if weather_alerts:
@@ -394,6 +395,30 @@ async def on_ready():
 async def on_shutdown():
     global reminders
     reminders = {}
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    
+    user_id = message.author.id
+    try:
+        connection = get_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT afk_message FROM afk_status WHERE user_id = %s", (user_id,))
+            result = cursor.fetchone()
+            if result:
+                afk_message = result[0]
+                await message.channel.send(f"Welcome back {message.author.mention} Your no longer AFK", delete_after=5)
+                cursor.execute("DELETE FROM afk_status WHERE user_id = %s", (user_id,))
+                connection.commit()
+            cursor.close()
+            connection.close()
+    except Error as e:
+        logging.error(f"Error: {e}")
+
+    await bot.process_commands(message)
 
 @bot.tree.command(name="hello", description="Says hello back")
 async def hello(interaction: discord.Interaction):
@@ -556,7 +581,7 @@ async def Weather(interaction: discord.Interaction, location: str):
                 'few clouds': '🌤️',
                 'scattered clouds': '⛅',
                 'broken clouds': '☁️',
-                'overcast clouds': '',
+                'overcast clouds': ':cloud:',
                 'shower rain': '🌦️',
                 'rain': '🌧️',
                 'thunderstorm': '⛈️',
@@ -629,6 +654,23 @@ async def opt_out(interaction: discord.Interaction):
         await interaction.response.send_message("You have opted out of receiving weather alerts.", ephemeral=True)
     except mysql.connector.Error as err:
         await interaction.response.send_message(f"Error: {err}", ephemeral=True)
+
+@bot.tree.command(name="afk", description="Go AFK for a bit")
+async def afk(interaction: discord.Interaction, message: str):
+    user_id = interaction.user.id
+    try:
+        connection = get_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            cursor.execute("REPLACE INTO afk_status (user_id, afk_message) VALUES (%s, %s)", (user_id, message))
+            connection.commit()
+            cursor.close()
+            connection.close()
+            await interaction.response.send_message(f"<@{user_id}> Has gone afk | (MSG: **{message}**)", delete_after=5)
+        else:
+            await interaction.response.send_message("Failed to connect to the database", delete_after=5)
+    except Error as e:
+        logging.error(f"Error: {e}")
 
 app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
 

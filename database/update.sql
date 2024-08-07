@@ -1,7 +1,7 @@
 USE atlas_database;
 
-CREATE TABLE alert_opts (
-    user_id BIGINT NOT NULL,
-    alert_type VARCHAR(255) NOT NULL,
-    PRIMARY KEY (user_id, alert_type)
-);
+CREATE TABLE afk_status (
+    user_id BIGINT PRIMARY KEY,
+    afk_message VARCHAR(255),
+    afk_since TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
