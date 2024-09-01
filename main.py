@@ -1,19 +1,25 @@
 import asyncio
 from datetime import datetime, timedelta
+import secrets
 import time
 import aiohttp
 from discord.ext import commands, tasks
 import discord
+from discord import app_commands
 import os
 import mysql.connector
 from mysql.connector import Error
 import requests
 import json
 import base64
-from flask import Flask, abort, jsonify, request, render_template_string, send_from_directory
+from flask import Flask, abort, jsonify, render_template, request, render_template_string, send_from_directory, flash, redirect, url_for, session
 from dotenv import load_dotenv
 import logging
 from discord.ui import Button, View
+from flask_mail import Mail, Message
+from authlib.integrations.flask_client import OAuth
+from flask_caching import Cache
+import threading
 
 load_dotenv()
 
@@ -33,13 +39,15 @@ bot = commands.Bot(command_prefix=prefix, intents=intents, help_command=None)
 token = os.getenv('token')
 reminders = {}
 owner_id = 969809822176411649
+end_time = datetime.now() + timedelta(minutes=1)
 
 # Database configuration
 db_config = {
     'user': 'inferno',
     'password': 'root',
     'host': 'localhost',
-    'database': 'atlas_database'
+    'database': 'atlas_database',
+    'charset': 'utf8mb4'
 }
 
 # PayPal configuration
@@ -132,6 +140,7 @@ class TicketView(View):
             embed = discord.Embed(title="Ticket Closed", description="The ticket you created has been closed. Here is the transcript.", color=discord.Color.green())
             embed.add_field(name="Transcript", value=f"http://picked-next-horse.ngrok-free.app/transcripts/general-{ticket_number}.html")
             await creator.send(embed=embed)
+            await creator.send(content='**Please check <#1275271775810490510> For your ticket id if you ever need your ticket transcript please right it down**')
         except discord.Forbidden:
             logging.error(f"Could not DM {creator}.")
 
@@ -160,11 +169,14 @@ def generate_html_transcript(messages, users_info):
             .message-content {{ margin-left: 10px; }}
             .message-images img {{ max-width: 200px; max-height: 200px; margin: 5px; }}
         </style>
+        <script defer src="/transcripts/cdn/ticket-obs/js/ticket.min.bundle.tim.js"></script>
     </head>
     <body>
         <div class='header'>
             <h1>Ticket Transcript</h1>
+            <p class="timer">This ticket will be deleted in <span class="time-left"></span></p>
             <p>This transcript was generated on {current_time}</p>
+            <script src="/transcripts/ticket.min.bundle.js"></script>
         </div>
     """
 
@@ -173,6 +185,7 @@ def generate_html_transcript(messages, users_info):
         html_content += f"""
         <div class='message'>
             <img src='{user_info['avatar_url']}' class='user-pfp' />
+            <p>{message['content']}</p>
             <div class='message-content'>
                 <strong class='user'>{user_info['display_name']}
                     <div class='user-info'>
@@ -181,7 +194,6 @@ def generate_html_transcript(messages, users_info):
                         <p><strong>Message Count:</strong> {user_info['message_count']}</p>
                     </div>
                 </strong>
-                <p>{message['content']}</p>
                 <div class='message-images'>
         """
 
@@ -310,73 +322,21 @@ async def remind_user(user_id: int, remind_time_at: datetime, message: str):
         for reminder in user_reminders:
             if reminder["remind_time_at"] == remind_time_at:
                 user = await bot.fetch_user(user_id)
-                await user.send(f"Reminder: {message}")
+                embed = discord.Embed(
+                    title='Reminder',
+                    description='**You have a reminder**',
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="Reminder", value=message, inline=False)
+                embed.set_footer(text=f"! Skye")
+                await user.send(embed=embed)
                 reminders[user_id].remove(reminder)
                 break
-
-@tasks.loop(minutes=50)
-async def check_alerts():
-    weather_alerts = fetch_weather_alerts()
-    if weather_alerts:
-        await send_alerts('weather', weather_alerts)
-
-def fetch_weather_alerts():
-    api_url = "https://api.weather.gov/alerts/active.json"
-    response = requests.get(api_url)
-    if response.status_code == 200:
-        alerts = response.json()
-        alert.get('features', [])
-        if alerts:
-            alert_messages = []
-            for alert in alerts:
-                alert_messages.append({
-                    'headline': alert['properties']['headline'],
-                    'description': alert['properties']['description'],
-                    'severity': alert['properties']['severity'],
-                    'event': alert['properites']['event'],
-                    'area_desc': alert['properites']['areadDesc'],
-                    'instruction': alert['properties']['instruction']
-                })
-            return alert_messages
-        return None
-
-async def send_alerts(alert_type, alert_messages):
-    try:
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        cursor.execute("SELECT user_id FROM alert_opts WHERE alert_type = %s", (alert_type,))
-        user_ids = cursor.fetchall()
-        cursor.close()
-        connection.close()
-
-        for alert_message in alert_messages:
-            embed = discord.Embed(
-                title=f"**{alert_message['event']} Alert",
-                description=alert_message['description'],
-                color=discord.Color.red() if alert_message['severity'] in ['Extreme', 'Severe'] else discord.Color.orange()
-            )
-            embed.add_field(name="Headline", value=alert_message['headline'], inline=False)
-            embed.add_field(name="Severity", value=alert_message['severity'], inline=False)
-            embed.add_field(name="Area", value=alert_message['area_desc'], inline=False)
-            embed.add_field(name="Instructions", value=alert_message['instruction'], inline=False)
-            embed.set_footer(text="Stay safe and follow official instructions")
-
-            for (user_id) in user_ids:
-                user = await bot.fetch_user(user_id)
-                try:
-                    await user.send(embed=embed)
-                except discord.Forbidden:
-                    pass
-
-    except mysql.connector.Error as err:
-        logging.critical(f"Database error: {err}")
 
 
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.CustomActivity(name="Watching Dev"), status="dnd")
-
-    check_alerts()
 
     guild_count = 0
     for guild in bot.guilds:
@@ -562,6 +522,7 @@ async def cat(interaction: discord.Interaction):
         await interaction.response.send_message("Failed to fetch a cat image")
 
 @bot.tree.command(name="weather", description="Gets the weather for a certin location")
+@app_commands.describe(location="The location to search")
 async def Weather(interaction: discord.Interaction, location: str):
     url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={weather_key}&units=metric"
 
@@ -583,6 +544,7 @@ async def Weather(interaction: discord.Interaction, location: str):
                 'broken clouds': '☁️',
                 'overcast clouds': ':cloud:',
                 'shower rain': '🌦️',
+                'light rain': '🌦️',
                 'rain': '🌧️',
                 'thunderstorm': '⛈️',
                 'snow': '🌨️',
@@ -627,33 +589,6 @@ async def remind_me(interaction: discord.Interaction, time: int, *, message: str
 
     asyncio.create_task(remind_user(interaction.user.id, remind_time_at, message))
 
-@bot.tree.command(name="opt-in", description="Opt-in to receive Weather alerts")
-async def opt_in(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    try:
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        cursor.execute("REPLACE INTO alert_opts (user_id, alert_type) VALUES (%s, %s)", (user_id, 'weather'))
-        connection.commit()
-        cursor.close()
-        connection.close()
-        await interaction.response.send_message("You have opted in to recive weather alerts.", ephemeral=True)
-    except mysql.connector.Error as err:
-        await interaction.response.send_message(f"Error: {err}", ephemeral=True)
-
-@bot.tree.command(name="opt-out", description="Opt-out of reciving weather alerts")
-async def opt_out(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    try:
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        cursor.execute("DELETE FROM alert_opts WHERE user_id = %s AND alert_type = %s", (user_id, 'weather'))
-        connection.commit()
-        cursor.close()
-        connection.close()
-        await interaction.response.send_message("You have opted out of receiving weather alerts.", ephemeral=True)
-    except mysql.connector.Error as err:
-        await interaction.response.send_message(f"Error: {err}", ephemeral=True)
 
 @bot.tree.command(name="afk", description="Go AFK for a bit")
 async def afk(interaction: discord.Interaction, message: str):
@@ -672,7 +607,64 @@ async def afk(interaction: discord.Interaction, message: str):
     except Error as e:
         logging.error(f"Error: {e}")
 
+@bot.tree.command(name="ban", description="Ban a member from the server")
+@app_commands.describe(user="The user to ban", reason="The reason to ban the user")
+async def ban(interaction: discord.Interaction, user: discord.User, reason: str = "No reason Provided"):
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message("This command can only be used in guild.", ephemeral=True)
+        return
+    
+    if not interaction.user.guild_permissions.ban_members:
+        await interaction.response.send_message("You do not have permisson to ban members.", ephemeral=True)
+        return
+
+    member = guild.get_member(user.id)
+    if member is None:
+        await interaction.response.send_message("User not found in this guild.", ephemeral=True)
+        return
+    
+    if member.guild_permissions.administrator:
+        await interaction.response.send_message("You can not ban a admin.", ephemeral=True)
+        return
+    
+    connection = get_db_connection()
+    cursor = connection.cursor()
+    cursor.execute("INSERT INTO bans (user_id, reason, banned_by, timestamp) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE reason=%s, banned_by=%s, timestamp=%s", (user.id, reason, interaction.user.id, datetime.now(), reason, interaction.user.id, datetime.now()))
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+    await member.ban(reason=reason)
+    await interaction.response.send_message(f"Successfully banned {user} for reason: {reason}")
+
 app = Flask(__name__, static_folder=os.path.abspath("transcripts/"))
+app.secret_key = os.urandom(24)
+
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.getenv('gmail_user')
+app.config['MAIL_PASSWORD'] = os.getenv('gmail_psw')
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv('gmail_sender')
+
+mail = Mail(app)
+
+app.config['GITHUB_CLIENT_ID'] = os.getenv('github_client_id')
+app.config['GITHUB_CLIENT_SECRET'] = os.getenv('github_client_secret')
+oauth = OAuth(app)
+github = oauth.register(
+    'github',
+    client_id=app.config['GITHUB_CLIENT_ID'],
+    client_secret=app.config['GITHUB_CLIENT_SECRET'],
+    authorize_url='https://github.com/login/oauth/authorize',
+    authorize_params=None,
+    access_token_url='https://github.com/login/oauth/access_token',
+    access_token_params=None,
+    refresh_token_url=None,
+    redirect_uri='http://picked-next-horse.ngrok-free.app/auth/callback',
+    client_kwargs={'scope': 'user:email'},
+)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -709,15 +701,15 @@ def webhook():
 
 @app.route('/', methods=['GET'])
 def index():
-    logging.info('Payment completed')
     return render_template_string("""
     <!DOCTYPE html>
     <html>
     <head>
-        <meta http-equiv="refresh" content="3; url=https://discord.gg/QPSasbcuSt" />
+        <meta http-equiv="refresh" content="1; url=https://picked-next-horse.ngrok-free.app/port" />
+        <link rel="stylesheet" href="{{ url_for('static', filename='styles.css' )}}">
     </head>
     <body>
-        <h1>Payment confirmed. | Redirecting</h1>
+        <h1>Redirecting</h1>
     </body>
     </html>                  
     """)
@@ -736,13 +728,333 @@ async def download_transcript(filename):
 
     return send_from_directory(transcript_dir, filename)
 
+
+
+@app.route('/port', methods=['GET', 'POST'])
+def port():
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>My Portfolio</title>
+        <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+        <style>
+            body {
+                margin: 0;
+                font-family: 'Roboto', sans-serif;
+                background-color: #ffffff;
+                color: #000000;
+                line-height: 1.6;
+                display: flex;
+                flex-direction: column;
+                min-height: 100vh;
+                transition: background-color 0.3s, color 0.3s;
+            }
+            body.dark-theme {
+                background: #0d1117;
+                color: #c9d1d9;
+            }
+            header {
+                text-align: center;
+                padding: 60px 0;
+            }
+            header h1 {
+                font-size: 2.5rem;
+                font-weight: 700;
+                margin-bottom: 10px;
+                color: #58a6ff;
+            }
+            .container {
+                max-width: 900px;
+                margin: 0px auto;
+                padding: 20px;
+                flex-grow: 1;
+            }
+            section {
+                margin: 40px 0;
+            }
+            h2 {
+                font-size: 1.75rem;
+                font-weight: 500;
+                margin-bottom: 15px;
+                color: #58a6ff;
+            }
+            p {
+                margin-bottom: 15px;
+            }
+            .skills, .projects {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 20px;
+            }
+            .skills div, .projects div {
+                background-color: #f0f0f0;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                transition: transform 0.3s ease-in-out;
+            }
+            body.dark-theme .skills div, .body.dark-theme .projects div {
+                background-color: #161b22;
+            }
+            .skills div:hover, .projects div:hover {
+                transform: translateY(-5px);
+            }
+            .flash-message {
+                background-color: #28a745;
+                padding: 15px;
+                margin-bottom: 20px;
+                border-radius: 5px;
+                color: #fff;
+                text-align: center;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            }
+            body.dark-theme .flash-message {
+            	background-color: #28a745;
+            }
+            footer {
+                text-align: center;
+                padding: 20px 0;
+                font-size: 0.9rem;
+                color: #8b949e;
+            }
+            .theme-toggle-btn {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                width: 30px;
+                height: 30px;
+                background-image: url('https://raw.githubusercontent.com/iHaveTailsyt/PBPD/5185963ceb57f2365b1b45a1887ab29a7b60783f/moon.svg');
+                background-size: cover;
+                border: none;
+                border-radius: 50%;
+                cursor: pointer;
+                transition: background-color 0.3s ease-in-out;
+            }
+            body.dark-theme .theme-toggle-btn {
+                background-image: url('https://raw.githubusercontent.com/iHaveTailsyt/PBPD/5185963ceb57f2365b1b45a1887ab29a7b60783f/sun.svg');
+            }
+            .auth {
+                text-align: center;
+                margin-top: 20px;
+            }
+            .auth a {
+                text-decoration: none;
+                color: #58a6ff;
+                font-size: 1.1rem;
+                border: 1px solid #58a6ff;
+                border-radius: 5px;
+                padding: 10px 20px;
+                transition: background-color 0.3s, color 0.3s;
+            }
+            .auth a:hover {
+                background-color: #58a6ff;
+                color: #fff;
+            }
+            a {
+                color: #ADD8E6;
+                text-decoration: none;
+            }
+            a:visited {
+                color: #ADD8E6;
+            }
+            a:hover {
+                color: #87CEFA;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>My Portfolio</h1>
+        </header>
+        <button class="theme-toggle-btn" onclick="toggleTheme()"></button>
+        <div class="container">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="flash-message">{{ message }}</div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+            <section id="about">
+                <h2>About Me</h2>
+                <p>Hello! I'm an aspiring developer with a passion for creating web applications. I enjoy learning new technologies and improving my skills. I am a student at CRMS</p>
+            </section>
+            <section id="skills">
+                <h2>Skills</h2>
+                <div>
+                    <h3>Frontend Development</h3>
+                    <p>HTML, CSS, JavaScript, React, Next.js, Typescript</p>
+                </div>
+                <div>
+                    <h3>Backend Development</h3>
+                    <p>Python, Flask, Node.js, Express, SQL</p>
+                </div>
+            </section>
+            <section id="projects">
+                <h2>Projects</h2>
+                <div>
+                    <h3>Website + API</h3>
+                    <p>This project happens to be this site Welcome The API is rendered in <code style="font-size: 1.2em;">/webhook</code> And im working on adding more stuff to this site for now its just this and the api </p>
+                </div>
+                <div>
+                    <h3>Skye</h3>
+                    <p>Skye is a general purpose discord bot to find the code please click <a href="https://github.com/iHaveTailsyt/Skye" target="__blank">here</a></p>
+                </div>
+            </section>
+            <section class="auth">
+                {% if 'user' in session %}
+                    <a href="{{ url_for('logout') }}">Logout</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}">Login with GitHub</a>
+                {% endif %}
+            </section>
+        </div>
+        <footer>
+            &copy; <span id="year"></span> Justin Konetsky. All Rights Reserved.
+            To contact me please click <a href="http://picked-next-horse.ngrok-free.app/port/contact" target="_self">here.</a>
+        </footer>
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const yearSpan = document.getElementById('year');
+                if (yearSpan) {
+                    yearSpan.textContent = new Date().getFullYear();
+                }
+            });
+
+            function setTheme(theme) {
+                document.body.className = theme
+                document.cookie = `theme=${theme};path=/;max-age=${60 * 60 * 24 * 365}`
+            }
+
+            function toggleTheme() {
+                let currentTheme = document.body.className;
+                let newTheme = currentTheme === 'dark-theme' ? '' : 'dark-theme';
+                setTheme(newTheme);
+            }
+
+            function applySavedTheme() {
+                const cookies = document.cookie.split(';');
+                let theme = '';
+                cookies.forEach(cookie => {
+                    let [key, value] = cookie.split('=').map(c => c.trim());
+                    if (key === 'theme') {
+                        theme = value;
+                    }
+            });
+            if (theme) {
+                document.body.className = theme;
+            }
+        }
+
+            applySavedTheme();
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(html)
+
+@app.route('/auth/login')
+def login():
+    redirect_uri = url_for('auth_callback', _external=True)
+    return github.authorize_redirect(redirect_uri)
+
+@app.route('/auth/callback')
+def auth_callback():
+    token = github.authorize_access_token()
+    logging.info(token)
+    resp = github.get('https://api.github.com/user')
+    logging.info(resp)
+    user_info = resp.json()
+    logging.info(user_info)
+    callback_code = request.args.get('code')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO authed_users (callback_code) VALUES (%s)", (callback_code,))
+    conn.commit()
+    cursor.close()
+    conn.close
+
+    session['user'] = user_info
+    flash("You were successfully logged in.")
+    return redirect(url_for('port'))
+
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    if request.method == 'GET':
+        return render_template('process.html')
+    time.sleep(1)
+    flash("You were successfully logged out.")
+    return redirect(url_for('port'))
+
+@app.route('/port/contact', methods=['GET', 'POST'])
+def contact():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        email = request.form.get('email')
+        message = request.form.get('message')
+
+        # Send email
+        msg = Message('New Contact Message from Portfolio', recipients=['ihavetails@gmail.com', 'skye.innosphere@gmail.com'])
+        msg.body = f"Name: {name}\nEmail: {email}\n\nMessage:\n{message}"
+        mail.send(msg)
+
+        
+
+        flash('Thank you for reaching out! Your message has been sent.', 'success')
+        return redirect(url_for('contact_success'))
+        
+    return render_template('index.html', methods=['GET', 'POST'])
+
+@app.route('/contact/success/callback?code=200?redir=True?timeout=5?12241=yes',  methods=['GET'])
+def contact_success():
+    if request.method == 'GET':
+        return render_template('process.html')
+    time.sleep(1)
+    return redirect(url_for('contact_callback'))
+
+@app.route('/contact/callback')
+def contact_callback():
+    return redirect(url_for('port'))
+
+@app.route('/discord/invite', methods=['GET'])
+async def dis_invite():
+    if request.method == 'GET':
+        return render_template('process.html')
+    time.sleep(1)
+    return redirect(location='https://discord.gg/QPSasbcuSt')
+
 if __name__ == "__main__":
     import threading
 
+    bot.start_time = time.time()
+
+    url = "http://picked-next-horse.ngrok-free.app/"
+
+    headers = {
+        "ngrok-skip-browser-warning": "true"
+    }
+
+    def send_request():
+        try:
+            response = requests.get(url, headers=headers)
+            print({response.status_code})
+        except requests.exceptions.RequestException as e:
+            pass
+
     def run_flask():
         app.run(port=5000)
+
 
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
 
     bot.run(token)
+
+    while True:
+        send_request()
+        time.sleep(600)

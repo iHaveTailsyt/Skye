@@ -2,3 +2,10 @@
 /logs
 /ngrok
 /transcripts
+nodemon.json
+/templates
+/database/all_databases_backup.sql
+/scripts
+/node_modules
+package.json
+package-lock.json

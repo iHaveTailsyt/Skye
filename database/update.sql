@@ -1,7 +1,8 @@
 USE atlas_database;
 
-CREATE TABLE afk_status (
-    user_id BIGINT PRIMARY KEY,
-    afk_message VARCHAR(255),
-    afk_since TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
+CREATE TABLE IF NOT EXISTS user_roles (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    role VARCHAR(255) NOT NULL,
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
