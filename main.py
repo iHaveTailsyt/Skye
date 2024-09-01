@@ -475,7 +475,7 @@ async def create_role(interaction: discord.Interaction, role_name: str, color: s
         except discord.DiscordException as e:
             await interaction.response.send_message(f"An error occurred while creating the role: {e}", ephemeral=True)
     else:
-        await interaction.response.send_message("You do not have premium therefor you cant run this command to get premium run `/but-premium` FYI its 9,99 EUR", ephemeral=True)
+        await interaction.response.send_message("You do not have premium therefor you cant run this command to get premium run `/but-premium` FYI its 9.99 EUR", ephemeral=True)
 
 @bot.tree.command(name="custom-command", description="Request a custom command")
 async def custom_command(interaction: discord.Interaction, name: str, description: str):
@@ -561,7 +561,7 @@ async def cat(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("Failed to fetch a cat image")
 
-@bot.tree.command(name="weather", description="Gets the weather for a certin location")
+@bot.tree.command(name="weather", description="Gets the weather for a certain location")
 async def Weather(interaction: discord.Interaction, location: str):
     url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={weather_key}&units=metric"
 
@@ -610,7 +610,7 @@ async def Weather(interaction: discord.Interaction, location: str):
         await interaction.response.send_message("An error occured while fetching weather data. Please try agian later.", ephemeral=True)
         logging.critical(f"Weather command error: {e}")
 
-@bot.tree.command(name="remind-me", description="Sets a reminder and will remind you after a certin amount of time")
+@bot.tree.command(name="remind-me", description="Sets a reminder and will remind you after a certian amount of time")
 async def remind_me(interaction: discord.Interaction, time: int, *, message: str):
     remind_time = time * 60
     remind_time_at = discord.utils.utcnow() + timedelta(seconds=remind_time)
