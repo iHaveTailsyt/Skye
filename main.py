@@ -728,7 +728,9 @@ async def download_transcript(filename):
 
     return send_from_directory(transcript_dir, filename)
 
-
+@app.route('/.well-known/discord', methods=['get'])
+def discord_verify_owner():
+    return("dh=854915b812fddbf16ccf377ec39d92140bff28ba")
 
 @app.route('/port', methods=['GET', 'POST'])
 def port():
